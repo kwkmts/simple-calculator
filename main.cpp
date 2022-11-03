@@ -1,6 +1,7 @@
 #include <cstring>
 #include <iomanip>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -18,6 +19,10 @@ void logErrorAt(const char *str, int loc) {
     exit(1);
 }
 
+//
+// lexer
+//
+
 typedef enum { NUM, RESERVED } TokenKind;
 
 class Token {
@@ -29,6 +34,7 @@ class Token {
   public:
     Token(double num, int loc)
         : kind(NUM), num(num), reserved('\0'), loc(loc) {}
+
     Token(char reserved, int loc)
         : kind(RESERVED), num(0), reserved(reserved), loc(loc) {}
 
@@ -41,52 +47,12 @@ class Token {
 std::vector<Token> tokenList;
 std::vector<Token>::iterator curTok;
 
-class Node {
-  public:
-    virtual ~Node() = default;
-    virtual double calc() = 0;
-};
-
-class NumNode : public Node {
-    double val;
-
-  public:
-    NumNode(double val) : val(val) {}
-    double getVal() const { return val; }
-
-    double calc() override { return val; }
-};
-
-class BinNode : public Node {
-    char op;
-    Node *LHS, *RHS;
-
-  public:
-    BinNode(char op, Node *LHS, Node *RHS) : op(op), LHS(LHS), RHS(RHS) {}
-    Node *getLHS() const { return LHS; }
-    Node *getRHS() const { return RHS; }
-
-    double calc() override {
-        switch (op) {
-        case '*':
-            return LHS->calc() * RHS->calc();
-        case '/':
-            return LHS->calc() / RHS->calc();
-        default:
-            logError("unknown operator");
-        }
-    }
-};
-
-Node *AST;
-
 void lex() {
     auto begin = input.begin();
     auto it = begin;
     char ch = *it;
 
     while (ch) {
-        // std::cout << it - begin << std::endl;
         if (isspace(ch)) {
             do {
                 ch = *(++it);
@@ -100,7 +66,7 @@ void lex() {
             } while (isdigit(ch));
             tokenList.push_back(
                 Token(strtod(numStr.c_str(), nullptr), it - begin));
-        } else if (strchr("*/", ch)) {
+        } else if (strchr("*/+-", ch)) {
             tokenList.push_back(Token(ch, it - begin));
             ch = *(++it);
         } else {
@@ -109,41 +75,102 @@ void lex() {
     }
 }
 
+//
+// parser
+//
+
+class Node {
+  public:
+    virtual ~Node() = default;
+    virtual double calc() = 0;
+};
+
+class NumNode : public Node {
+    double val;
+
+  public:
+    explicit NumNode(double val) : val(val) {}
+
+    double calc() override { return val; }
+};
+
+class BinNode : public Node {
+    char op;
+    std::unique_ptr<Node> LHS, RHS;
+
+  public:
+    BinNode(char op, std::unique_ptr<Node> LHS, std::unique_ptr<Node> RHS)
+        : op(std::move(op)), LHS(std::move(LHS)), RHS(std::move(RHS)) {}
+
+    double calc() override {
+        switch (op) {
+        case '*':
+            return LHS->calc() * RHS->calc();
+        case '/':
+            return LHS->calc() / RHS->calc();
+        case '+':
+            return LHS->calc() + RHS->calc();
+        case '-':
+            return LHS->calc() - RHS->calc();
+        default:
+            logError("unknown operator");
+        }
+    }
+};
+
+std::unique_ptr<Node> AST;
+
 bool isNum(std::vector<Token>::iterator tok) { return tok->getKind() == NUM; }
 
 bool isReserved(std::vector<Token>::iterator tok, char ch) {
     return tok->getKind() == RESERVED && tok->getReserved() == ch;
 }
 
-Node *primary();
-Node *mul();
+std::unique_ptr<Node> primary();
+std::unique_ptr<Node> mul();
+std::unique_ptr<Node> add();
 
 // primary := num
-Node *primary() {
+std::unique_ptr<Node> primary() {
     if (!isNum(curTok)) {
         logErrorAt("not a number", curTok->getLoc());
     }
-    Node *node = new NumNode(curTok->getNum());
+    auto node = std::make_unique<NumNode>(curTok->getNum());
     curTok++;
-    return node;
+    return std::move(node);
 }
 
 // mul := primary ("*" primary | "/" primary)*
-Node *mul() {
-    Node *node = primary();
+std::unique_ptr<Node> mul() {
+    auto node = primary();
 
     for (;;) {
         if (isReserved(curTok, '*') || isReserved(curTok, '/')) {
             char op = curTok->getReserved();
             curTok++;
-            node = new BinNode(op, node, primary());
+            node = std::make_unique<BinNode>(op, std::move(node), primary());
         } else {
-            return node;
+            return std::move(node);
         }
     }
 }
 
-void parse() { AST = mul(); }
+// add := mul ("+" mul | "-" mul)*
+std::unique_ptr<Node> add() {
+    auto node = mul();
+
+    for (;;) {
+        if (isReserved(curTok, '+') || isReserved(curTok, '-')) {
+            char op = curTok->getReserved();
+            curTok++;
+            node = std::make_unique<BinNode>(op, std::move(node), mul());
+        } else {
+            return std::move(node);
+        }
+    }
+}
+
+void parse() { AST = add(); }
 
 int main() {
     std::cout << "> ";
