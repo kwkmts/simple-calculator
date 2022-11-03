@@ -66,7 +66,7 @@ void lex() {
             } while (isdigit(ch));
             tokenList.push_back(
                 Token(strtod(numStr.c_str(), nullptr), it - begin));
-        } else if (strchr("*/+-", ch)) {
+        } else if (strchr("*/+-()", ch)) {
             tokenList.push_back(Token(ch, it - begin));
             ch = *(++it);
         } else {
@@ -120,23 +120,35 @@ class BinNode : public Node {
 
 std::unique_ptr<Node> AST;
 
-bool isNum(std::vector<Token>::iterator tok) { return tok->getKind() == NUM; }
+bool isNum() { return curTok->getKind() == NUM; }
 
-bool isReserved(std::vector<Token>::iterator tok, char ch) {
-    return tok->getKind() == RESERVED && tok->getReserved() == ch;
+bool isReserved(char ch) {
+    return curTok->getKind() == RESERVED && curTok->getReserved() == ch;
 }
 
 std::unique_ptr<Node> primary();
 std::unique_ptr<Node> mul();
 std::unique_ptr<Node> add();
 
-// primary := num
+// primary := num | "(" add ")"
 std::unique_ptr<Node> primary() {
-    if (!isNum(curTok)) {
+    std::unique_ptr<Node> node;
+
+    if (isReserved('(')) {
+        curTok++;
+        node = add();
+        if (!isReserved(')')) {
+            logErrorAt("')' expected", curTok->getLoc());
+        }
+        curTok++;
+
+    } else if (isNum()) {
+        node = std::make_unique<NumNode>(curTok->getNum());
+        curTok++;
+    } else {
         logErrorAt("not a number", curTok->getLoc());
     }
-    auto node = std::make_unique<NumNode>(curTok->getNum());
-    curTok++;
+
     return std::move(node);
 }
 
@@ -145,7 +157,7 @@ std::unique_ptr<Node> mul() {
     auto node = primary();
 
     for (;;) {
-        if (isReserved(curTok, '*') || isReserved(curTok, '/')) {
+        if (isReserved('*') || isReserved('/')) {
             char op = curTok->getReserved();
             curTok++;
             node = std::make_unique<BinNode>(op, std::move(node), primary());
@@ -160,7 +172,7 @@ std::unique_ptr<Node> add() {
     auto node = mul();
 
     for (;;) {
-        if (isReserved(curTok, '+') || isReserved(curTok, '-')) {
+        if (isReserved('+') || isReserved('-')) {
             char op = curTok->getReserved();
             curTok++;
             node = std::make_unique<BinNode>(op, std::move(node), mul());
