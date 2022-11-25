@@ -1,3 +1,4 @@
+#include <cmath>
 #include <cstring>
 #include <iomanip>
 #include <iostream>
@@ -9,21 +10,21 @@ std::string input;
 
 void logError(const char *str) {
     std::cerr << str << std::endl;
-    exit(1);
+    std::exit(1);
 }
 
 void logErrorAt(const char *str, int loc) {
     std::cerr << input << '\n';
     std::cerr << std::setw(loc) << "";
     std::cerr << "^ " << str << std::endl;
-    exit(1);
+    std::exit(1);
 }
 
 //
 // lexer
 //
 
-typedef enum { NUM, RESERVED } TokenKind;
+using TokenKind = enum { TK_NUM, TK_RESERVED, TK_EOF };
 
 class Token {
     TokenKind kind;
@@ -33,10 +34,12 @@ class Token {
 
   public:
     Token(double num, int loc)
-        : kind(NUM), num(num), reserved('\0'), loc(loc) {}
+        : kind(TK_NUM), num(num), reserved('\0'), loc(loc) {}
 
     Token(char reserved, int loc)
-        : kind(RESERVED), num(0), reserved(reserved), loc(loc) {}
+        : kind(TK_RESERVED), num(0), reserved(reserved), loc(loc) {}
+
+    Token(int loc) : kind(TK_EOF), num(0), reserved('\0'), loc(loc) {}
 
     TokenKind getKind() const { return kind; }
     double getNum() const { return num; }
@@ -53,26 +56,28 @@ void lex() {
     char ch = *it;
 
     while (ch) {
-        if (isspace(ch)) {
+        if (std::isspace(ch)) {
             do {
                 ch = *(++it);
-            } while (isspace(ch));
+            } while (std::isspace(ch));
 
-        } else if (isdigit(ch)) {
+        } else if (std::isdigit(ch)) {
             std::string numStr;
             do {
                 numStr += ch;
                 ch = *(++it);
-            } while (isdigit(ch));
+            } while (std::isdigit(ch));
             tokenList.push_back(
-                Token(strtod(numStr.c_str(), nullptr), it - begin));
-        } else if (strchr("*/+-()", ch)) {
+                Token(std::strtod(numStr.c_str(), nullptr), it - begin));
+        } else if (std::strchr("*/+-()^", ch)) {
             tokenList.push_back(Token(ch, it - begin));
             ch = *(++it);
         } else {
             logErrorAt("unknown token", it - begin);
         }
     }
+
+    tokenList.push_back(Token(input.length()));
 }
 
 //
@@ -112,6 +117,8 @@ class BinNode : public Node {
             return LHS->calc() + RHS->calc();
         case '-':
             return LHS->calc() - RHS->calc();
+        case '^':
+            return std::pow(LHS->calc(), RHS->calc());
         default:
             logError("unknown operator");
         }
@@ -120,13 +127,14 @@ class BinNode : public Node {
 
 std::unique_ptr<Node> AST;
 
-bool isNum() { return curTok->getKind() == NUM; }
+bool isNum() { return curTok->getKind() == TK_NUM; }
 
 bool isReserved(char ch) {
-    return curTok->getKind() == RESERVED && curTok->getReserved() == ch;
+    return curTok->getKind() == TK_RESERVED && curTok->getReserved() == ch;
 }
 
 std::unique_ptr<Node> primary();
+std::unique_ptr<Node> pow();
 std::unique_ptr<Node> mul();
 std::unique_ptr<Node> add();
 
@@ -149,20 +157,34 @@ std::unique_ptr<Node> primary() {
         logErrorAt("not a number", curTok->getLoc());
     }
 
-    return std::move(node);
+    return node;
 }
 
-// mul := primary ("*" primary | "/" primary)*
-std::unique_ptr<Node> mul() {
+// pow := primary ("^" primary)*
+std::unique_ptr<Node> pow() {
     auto node = primary();
+
+    for (;;) {
+        if (isReserved('^')) {
+            curTok++;
+            node = std::make_unique<BinNode>('^', std::move(node), primary());
+        } else {
+            return node;
+        }
+    }
+}
+
+// mul := pow ("*" pow | "/" pow)*
+std::unique_ptr<Node> mul() {
+    auto node = pow();
 
     for (;;) {
         if (isReserved('*') || isReserved('/')) {
             char op = curTok->getReserved();
             curTok++;
-            node = std::make_unique<BinNode>(op, std::move(node), primary());
+            node = std::make_unique<BinNode>(op, std::move(node), pow());
         } else {
-            return std::move(node);
+            return node;
         }
     }
 }
@@ -177,16 +199,22 @@ std::unique_ptr<Node> add() {
             curTok++;
             node = std::make_unique<BinNode>(op, std::move(node), mul());
         } else {
-            return std::move(node);
+            return node;
         }
     }
 }
 
 void parse() { AST = add(); }
 
-int main() {
-    std::cout << "> ";
-    std::getline(std::cin, input);
+int main(int argc, char **argv) {
+    if (argc == 1) {
+        std::cout << "> ";
+        std::getline(std::cin, input);
+    } else if (argc == 2) {
+        input = argv[1];
+    } else {
+        logError("bad arguments");
+    }
 
     lex();
 
